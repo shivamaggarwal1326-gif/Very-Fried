@@ -1,6 +1,6 @@
 // src/App.jsx
-import Dashboard from "./components/layout/Dashboard.jsx";
-import KitchenCanvas from "./components/sketches/KitchenCanvas.jsx";
+import Dashboard from "./ui/layout/Dashboard.jsx";
+import KitchenCanvas from "./ui/sketches/KitchenCanvas.jsx";
 
 function App() {
   return (
