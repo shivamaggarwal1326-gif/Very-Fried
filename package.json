@@ -1,25 +1,40 @@
 {
-  "name": "very-fried",
+  "name": "very-fryd",
   "private": true,
   "version": "0.0.0",
   "type": "module",
   "scripts": {
     "dev": "vite",
     "build": "vite build",
-    "lint": "eslint .",
     "preview": "vite preview"
   },
   "dependencies": {
+    "@ai-sdk/anthropic": "^3.0.71",
+    "@google/generative-ai": "^0.24.1",
+    "@supabase/supabase-js": "^2.103.3",
     "@tailwindcss/vite": "^4.2.2",
+    "@upstash/ratelimit": "^2.0.8",
+    "@upstash/redis": "^1.37.0",
+    "ai": "^6.0.168",
+    "animejs": "^4.3.6",
     "autoprefixer": "^10.5.0",
+    "browser-image-compression": "^2.0.2",
+    "express-rate-limit": "^8.4.0",
+    "framer-motion": "^12.0.0",
     "gsap": "^3.15.0",
+    "motion": "^12.38.0",
     "postcss": "^8.5.10",
     "react": "^19.2.4",
     "react-dom": "^19.2.4",
-    "tailwindcss": "^4.2.2"
+    "react-router-dom": "^7.14.2",
+    "recharts": "^2.15.0",
+    "tailwindcss": "^4.2.2",
+    "zustand": "^5.0.12"
   },
   "devDependencies": {
     "@eslint/js": "^9.39.4",
+    "@playwright/test": "^1.59.1",
+    "@types/node": "^25.6.0",
     "@types/react": "^19.2.14",
     "@types/react-dom": "^19.2.3",
     "@vitejs/plugin-react": "^6.0.1",
@@ -27,6 +42,12 @@
     "eslint-plugin-react-hooks": "^7.0.1",
     "eslint-plugin-react-refresh": "^0.5.2",
     "globals": "^17.4.0",
-    "vite": "^8.0.4"
+    "vite": "^8.0.4",
+    "vite-plugin-pwa": "^0.19.8"
+  },
+  "overrides": {
+    "vite-plugin-pwa": {
+      "vite": "$vite"
+    }
   }
 }
