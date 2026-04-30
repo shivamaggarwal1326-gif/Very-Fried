@@ -21,7 +21,6 @@ export default function Admin() {
 
   const fetchRecipes = async () => {
     logStatus('SYNCING WITH CLOUD DATABASE...');
-    // BUG FIXED: Removed the .order('created_at') so it doesn't crash on the missing column
     const { data, error } = await supabase.from('recipes').select('*');
     
     if (data) {
@@ -35,11 +34,11 @@ export default function Admin() {
     setStatusLogs(prev => [...prev, `> ${msg}`]);
   };
 
-  // --- 1. CREATE: The AI Parser ---
+  // --- 1. CREATE: The Claude AI Parser ---
   const processAndDeployNew = async () => {
     if (!rawText.trim()) { logStatus('ERROR: NO INTEL DETECTED.'); return; }
     setIsProcessing(true);
-    logStatus('INITIATING LLaMA-3.3-70B FORMATTING PROTOCOL...');
+    logStatus('INITIATING CLAUDE FORMATTING PROTOCOL...');
 
     try {
       const systemPrompt = `You are a strict data parser. Convert the provided raw recipe text into the exact JSON format required by the application. 
@@ -69,18 +68,22 @@ export default function Admin() {
       }
       ESTIMATE NUTRIENTS AND PRICES IF MISSING. DO NOT use Markdown formatting (\`\`\`json). Output RAW JSON ONLY.`;
 
-      const payload = {
-        model: "llama-3.3-70b-versatile",
-        messages: [{ role: "system", content: systemPrompt }, { role: "user", content: rawText }]
-      };
+      // STRICTLY USING CLAUDE
+      const response = await fetch('/api/analyst', {
+        method: 'POST', 
+        headers: { 'Content-Type': 'application/json' }, 
+        body: JSON.stringify({ 
+          messages: [{ role: 'user', content: rawText }], 
+          systemPrompt: systemPrompt 
+        })
+      });
 
-      const response = await fetch("/api/groq", { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
       const data = await response.json();
       if (!response.ok) throw new Error(data.error?.message || "Secure routing failed.");
 
-      logStatus('LLaMA-3.3 SUCCESS: JSON BLOCKS GENERATED.');
+      logStatus('CLAUDE SUCCESS: JSON BLOCKS GENERATED.');
       
-      let outputText = data.choices[0].message.content.trim();
+      let outputText = data.text.trim();
       if (outputText.startsWith('```json')) outputText = outputText.replace(/^```json/, '').replace(/```$/, '').trim();
       else if (outputText.startsWith('```')) outputText = outputText.replace(/^```/, '').replace(/```$/, '').trim();
 
@@ -176,22 +179,39 @@ export default function Admin() {
               {recipes.length === 0 ? (
                 <div className="col-span-full flex items-center justify-center h-full text-xs font-black text-gray-400 uppercase italic">No protocols found on network.</div>
               ) : (
-                recipes.map((recipe) => (
-                  <div key={recipe.id} className="bg-white border-2 border-black p-4 shadow-[3px_3px_0px_0px_rgba(0,0,0,1)] flex flex-col gap-2 relative group">
-                    <div className="flex justify-between items-start">
-                      <span className="font-black text-sm uppercase truncate pr-4">{recipe.data?.title || recipe.id}</span>
-                      <span className="text-[9px] font-bold uppercase bg-gray-200 px-1 border border-black">{recipe.data?.category || 'UNKNOWN'}</span>
-                    </div>
-                    <p className="text-[10px] text-gray-500 font-bold truncate">{recipe.data?.desc || 'No description available.'}</p>
-                    <div className="flex justify-between items-center mt-2 border-t-2 border-gray-100 pt-2">
-                      <span className="text-[10px] font-black uppercase text-green-600">₹{recipe.data?.price || '???'}</span>
-                      <div className="flex gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
-                        <button onClick={() => openEditMode(recipe)} className="text-[10px] font-black uppercase bg-black text-white px-2 py-1 hover:bg-gray-800">EDIT</button>
-                        <button onClick={() => handleDelete(recipe.id)} className="text-[10px] font-black uppercase bg-red-100 text-red-600 border border-red-600 px-2 py-1 hover:bg-red-600 hover:text-white transition-colors">PURGE</button>
+                recipes.map((recipe) => {
+                  // Determine dietary icon colors dynamically
+                  const diet = recipe.data?.diet?.toUpperCase() || 'VEG';
+                  let dotColor = "bg-green-600";
+                  let boxColor = "border-green-600";
+                  if (diet === 'NON-VEG') { dotColor = "bg-red-600"; boxColor = "border-red-600"; }
+                  if (diet === 'EGG') { dotColor = "bg-yellow-500"; boxColor = "border-yellow-500"; }
+
+                  return (
+                    <div key={recipe.id} className="bg-white border-2 border-black p-4 shadow-[3px_3px_0px_0px_rgba(0,0,0,1)] flex flex-col gap-2 relative group">
+                      <div className="flex justify-between items-start gap-2">
+                        <div className="flex items-start gap-2 overflow-hidden mt-0.5">
+                          {/* Authentic Dietary Icon */}
+                          <div className={`w-3.5 h-3.5 border-2 shrink-0 flex items-center justify-center mt-0.5 ${boxColor}`}>
+                            <div className={`w-1.5 h-1.5 rounded-full ${dotColor}`}></div>
+                          </div>
+                          <span className="font-black text-sm uppercase truncate pr-2">{recipe.data?.title || recipe.id}</span>
+                        </div>
+                        <span className="text-[9px] font-bold uppercase bg-gray-200 px-1 border border-black shrink-0">{recipe.data?.category || 'UNKNOWN'}</span>
+                      </div>
+                      <p className="text-[10px] text-gray-500 font-bold truncate">{recipe.data?.desc || 'No description available.'}</p>
+                      <div className="flex justify-between items-center mt-2 border-t-2 border-gray-100 pt-2">
+                        {/* Swapped Price for Prep Time */}
+                        <span className="text-[10px] font-black uppercase text-gray-400">⏱ {recipe.data?.time || 'TIME N/A'}</span>
+                        
+                        <div className="flex gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
+                          <button onClick={() => openEditMode(recipe)} className="text-[10px] font-black uppercase bg-black text-white px-2 py-1 hover:bg-gray-800">EDIT</button>
+                          <button onClick={() => handleDelete(recipe.id)} className="text-[10px] font-black uppercase bg-red-100 text-red-600 border border-red-600 px-2 py-1 hover:bg-red-600 hover:text-white transition-colors">PURGE</button>
+                        </div>
                       </div>
                     </div>
-                  </div>
-                ))
+                  );
+                })
               )}
             </div>
           )}
