@@ -48,10 +48,9 @@ export default async function handler(req) {
       return new Response(JSON.stringify({ error: "Malformed payload." }), { status: 400 });
     }
 
-    // --- THE ABSOLUTE FIX: HARD-LOCKED TO SONNET 3.5 ---
-    // All dynamic switching logic is gone. 
-    // This strictly forces the API to use the flagship model every single time.
-    const selectedModel = 'claude-3-5-sonnet-20241022';
+    // --- THE FIX: USING THE UNIVERSAL LATEST TAG ---
+    // This forces Anthropic to route to the active 3.5 model for your tier
+    const selectedModel = 'claude-3-5-sonnet-latest';
 
     // 4. GENERATE
     const result = await generateText({
