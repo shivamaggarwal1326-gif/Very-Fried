@@ -1,10 +1,10 @@
 import React, { useState } from 'react';
 import { supabase } from '../../lib/supabaseClient';
 
-export default function LiveFloor({ tables, setTables, liveMenu, merchantData, hasXP, onRefreshDashboard }) {
+export default function LiveFloor({ tables, setTables, liveMenu, merchantData, hasXP, onRefreshDashboard, setInventoryStock }) {
   const [selectedTableId, setSelectedTableId] = useState(null);
   const [isProcessing, setIsProcessing] = useState(false);
-  const [errorBanner, setErrorBanner] = useState(null); // --- NEW: Inline Error State ---
+  const [errorBanner, setErrorBanner] = useState(null);
 
   const activeTable = tables.find(t => t.id === selectedTableId);
 
@@ -56,12 +56,12 @@ export default function LiveFloor({ tables, setTables, liveMenu, merchantData, h
     if (!activeTable || activeTable.items.length === 0) return;
     setIsProcessing(true);
     setErrorBanner(null);
-    
+
     const { finalTotal } = calculateBill(activeTable.items);
 
     const endTime = Date.now();
-    const durationMinutes = activeTable.session_start 
-      ? Math.round((endTime - activeTable.session_start) / 60000) 
+    const durationMinutes = activeTable.session_start
+      ? Math.round((endTime - activeTable.session_start) / 60000)
       : 0;
 
     try {
@@ -69,42 +69,84 @@ export default function LiveFloor({ tables, setTables, liveMenu, merchantData, h
       const actualBill = isComp ? 0 : finalTotal;
       const discountAmount = isComp ? finalTotal : 0;
 
+      // 1: Log the transaction
       const { data: transData, error: transErr } = await supabase
         .from('merchant_transactions')
-        .insert([{ 
-          merchant_id: merchantData.id, 
-          total_bill: actualBill, 
-          status: transactionStatus, 
+        .insert([{
+          merchant_id: merchantData.id,
+          total_bill: actualBill,
+          status: transactionStatus,
           discount_amount: discountAmount,
           order_type: `table-${activeTable.id}`,
           table_id: activeTable.id,
-          server_id: null, // --- FIXED GAP 4: Removed hardcoded string to pass UUID validation ---
+          server_id: null,
           order_duration_minutes: durationMinutes
         }])
         .select().single();
-      
+
       if (transErr) throw transErr;
 
+      // 2: Log culinary telemetry
       const telemetryInserts = activeTable.items.map(item => ({
-        merchant_id: merchantData.id, transaction_id: transData.id, recipe_id: item.name, event_type: activeTable.type.toLowerCase(), quantity: item.qty
+        merchant_id: merchantData.id,
+        transaction_id: transData.id,
+        recipe_id: item.name,
+        event_type: activeTable.type.toLowerCase(),
+        quantity: item.qty
       }));
       await supabase.from('culinary_telemetry').insert(telemetryInserts);
 
-      setTables(prev => prev.map(t => t.id === selectedTableId ? { ...t, items: [], status: 'VACANT', activeToken: null, session_start: null } : t));
+      // 3: AUTO-DEDUCT INVENTORY (The BOM Engine)
+      for (const item of activeTable.items) {
+        const { data: bomRows, error: bomErr } = await supabase
+          .from('menu_item_ingredients')
+          .select('inventory_item_id, quantity_used')
+          .eq('merchant_id', merchantData.id)
+          .eq('menu_item_name', item.name);
+
+        // Skip silently if no BOM is mapped
+        if (bomErr || !bomRows || bomRows.length === 0) continue;
+
+        for (const ingredient of bomRows) {
+          const totalDeduction = ingredient.quantity_used * item.qty;
+          // Trigger the atomic SQL function we just created
+          await supabase.rpc('deduct_inventory', {
+            item_id: ingredient.inventory_item_id,
+            amount: totalDeduction
+          });
+        }
+      }
+
+      // ---> NEW: INSTANT UI REFRESH <---
+      if (setInventoryStock) {
+        const { data: freshInventory } = await supabase
+          .from('merchant_inventory')
+          .select('*')
+          .eq('merchant_id', merchantData.id);
+        if (freshInventory) setInventoryStock(freshInventory);
+      }
+      // ----------------------------------
+
+      // 4: Clear the table
+      setTables(prev => prev.map(t =>
+        t.id === selectedTableId
+          ? { ...t, items: [], status: 'VACANT', activeToken: null, session_start: null }
+          : t
+      ));
       setSelectedTableId(null);
       if (onRefreshDashboard) onRefreshDashboard(merchantData.id);
-    } catch (error) { 
-      // --- FIXED GAP 1: Inline Error State instead of browser alert() ---
+
+    } catch (error) {
       setErrorBanner(`POS Error: ${error.message}`);
-      setTimeout(() => setErrorBanner(null), 5000); 
-    } 
-    finally { setIsProcessing(false); }
+      setTimeout(() => setErrorBanner(null), 5000);
+    } finally {
+      setIsProcessing(false);
+    }
   };
 
   return (
     <div className="grid grid-cols-1 lg:grid-cols-3 gap-8 flex-1 min-h-0 items-start relative">
       
-      {/* NEW: NEO-BRUTALIST ERROR BANNER */}
       {errorBanner && (
         <div className="absolute top-0 left-1/2 -translate-x-1/2 z-50 bg-red-600 text-white font-black uppercase tracking-widest px-6 py-3 border-4 border-black shadow-[6px_6px_0px_0px_rgba(0,0,0,1)] animate-pulse w-max max-w-[90%] text-center text-xs md:text-sm">
           ⚠️ {errorBanner}

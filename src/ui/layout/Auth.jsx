@@ -8,17 +8,22 @@ export default function Auth({ onBack }) {
   const [password, setPassword] = useState('');
   const [isSignUp, setIsSignUp] = useState(false);
   const [errorMsg, setErrorMsg] = useState(null);
+  const [successMsg, setSuccessMsg] = useState(null); // <-- NEW: Success State
 
   const handleAuth = async (e) => {
     e.preventDefault();
     setLoading(true);
     setErrorMsg(null);
+    setSuccessMsg(null);
 
     try {
       if (isSignUp) {
         const { error } = await supabase.auth.signUp({ email, password });
         if (error) throw error;
-        alert('Verification protocol sent. Check your email to confirm clearance.');
+        // --- FIXED: Replaced blocking alert() with inline animated success state ---
+        setSuccessMsg('Verification protocol sent. Check your email to confirm clearance.');
+        setIsSignUp(false); // Drop them back to login mode so they can enter once verified
+        setPassword(''); // Clear password for security
       } else {
         const { error } = await supabase.auth.signInWithPassword({ email, password });
         if (error) throw error;
@@ -30,12 +35,23 @@ export default function Auth({ onBack }) {
     }
   };
 
+  // --- FIXED UX: Smart Abort Routing ---
+  const handleAbort = () => {
+    if (isSignUp) {
+      setIsSignUp(false);
+      setErrorMsg(null);
+      setSuccessMsg(null);
+    } else {
+      onBack();
+    }
+  };
+
   return (
     <div className="min-h-screen p-4 md:p-8 font-sans text-black flex flex-col items-center justify-center bg-transparent relative overflow-hidden w-full">
       <div className="absolute inset-0 opacity-[0.03] pointer-events-none z-0" style={{ backgroundImage: 'linear-gradient(#000 1px, transparent 1px), linear-gradient(90deg, #000 1px, transparent 1px)', backgroundSize: '40px 40px' }}></div>
       <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} className="w-full max-w-md bg-[#fcfbf9] border-4 border-black p-8 md:p-10 shadow-[8px_8px_0px_0px_rgba(220,38,38,1)] relative z-10 flex flex-col">
         
-        <button onClick={onBack} className="text-black text-[10px] md:text-xs font-black uppercase tracking-widest hover:text-red-600 transition-colors self-start mb-6">
+        <button onClick={handleAbort} className="text-black text-[10px] md:text-xs font-black uppercase tracking-widest hover:text-red-600 transition-colors self-start mb-6">
           ← ABORT
         </button>
 
@@ -46,13 +62,22 @@ export default function Auth({ onBack }) {
         </div>
         <h1 className="text-3xl md:text-4xl font-black uppercase tracking-tighter leading-tight text-center mb-2">{isSignUp ? 'ENLIST NOW' : 'SECURE LOGIN'}</h1>
         <p className="text-xs font-bold text-gray-500 uppercase tracking-widest text-center mb-8">Verify credentials to access the Command Center</p>
+        
         <AnimatePresence>
+          {/* Error Banner */}
           {errorMsg && (
             <motion.div initial={{ opacity: 0, height: 0 }} animate={{ opacity: 1, height: 'auto' }} exit={{ opacity: 0, height: 0 }} className="bg-black text-red-500 font-mono text-xs p-3 mb-6 border border-red-600 uppercase tracking-tight">
               🔥 ERROR: {errorMsg}
             </motion.div>
           )}
+          {/* Success Banner */}
+          {successMsg && (
+            <motion.div initial={{ opacity: 0, height: 0 }} animate={{ opacity: 1, height: 'auto' }} exit={{ opacity: 0, height: 0 }} className="bg-black text-green-400 font-mono text-xs p-3 mb-6 border border-green-600 uppercase tracking-tight">
+              ✓ INTEL: {successMsg}
+            </motion.div>
+          )}
         </AnimatePresence>
+
         <form onSubmit={handleAuth} className="flex flex-col gap-4">
           <div className="flex flex-col gap-1">
             <label className="text-[10px] font-black uppercase tracking-widest">Email Address</label>
@@ -67,7 +92,7 @@ export default function Auth({ onBack }) {
           </button>
         </form>
         <div className="mt-6 text-center">
-          <button onClick={() => { setIsSignUp(!isSignUp); setErrorMsg(null); }} className="text-[10px] font-black uppercase tracking-widest text-gray-500 hover:text-black transition-colors border-b border-transparent hover:border-black pb-0.5">
+          <button onClick={() => { setIsSignUp(!isSignUp); setErrorMsg(null); setSuccessMsg(null); }} className="text-[10px] font-black uppercase tracking-widest text-gray-500 hover:text-black transition-colors border-b border-transparent hover:border-black pb-0.5">
             {isSignUp ? 'ALREADY ENLISTED? LOGIN HERE.' : 'NEW RECRUIT? ENLIST HERE.'}
           </button>
         </div>

@@ -1,13 +1,23 @@
-import React from 'react';
+import React, { useState, useEffect } from 'react';
 import { THEMES } from '../sketches/KitchenCanvas.jsx';
+import { supabase } from '../../lib/supabaseClient'; // THE FIX: Needed for live board
 
 export default function TrophyRoom({ vfTag, userXP, rankIntel, activeTheme, setTheme, onClose, onSignOut, isAnonymous, stats = { missions: 0, highestSpice: 'None', favorite: 'None', deployments: 0 } }) {
   
+  const [leaderboard, setLeaderboard] = useState([]);
   const progressPercent = Math.min(100, (userXP / rankIntel.target) * 100);
+
+  // THE FIX: Real Database Leaderboard Fetch
+  useEffect(() => {
+    const fetchBoard = async () => {
+      const { data } = await supabase.from('profiles').select('vf_tag, total_xp').order('total_xp', { ascending: false }).limit(3);
+      if (data) setLeaderboard(data);
+    };
+    fetchBoard();
+  }, []);
 
   return (
     <div className="fixed inset-0 z-[150] flex flex-col bg-[#fcfbf9]/80 backdrop-blur-md overflow-y-auto">
-      
       <div className="absolute inset-0 opacity-[0.03] pointer-events-none z-0" style={{ backgroundImage: 'linear-gradient(#000 1px, transparent 1px), linear-gradient(90deg, #000 1px, transparent 1px)', backgroundSize: '40px 40px' }}></div>
 
       <div className="sticky top-0 bg-black text-white p-4 flex justify-between items-center z-10 shadow-lg">
@@ -17,7 +27,6 @@ export default function TrophyRoom({ vfTag, userXP, rankIntel, activeTheme, setT
 
       <div className="p-4 md:p-8 max-w-4xl mx-auto w-full flex flex-col gap-6 relative z-10">
         
-        {/* 1. PROFILE CARD */}
         <div className="bg-white border-4 border-black p-6 shadow-[8px_8px_0px_0px_rgba(0,0,0,1)] relative overflow-hidden">
           <div className="absolute -right-10 -top-10 text-[100px] font-black text-gray-100 opacity-50 select-none pointer-events-none">VF</div>
           <div className="flex justify-between items-start mb-8 relative z-10">
@@ -42,7 +51,6 @@ export default function TrophyRoom({ vfTag, userXP, rankIntel, activeTheme, setT
           </div>
         </div>
 
-        {/* 2. STATS GRID */}
         <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mt-2">
           <StatBlock label="Missions Completed" value={stats.missions} />
           <StatBlock label="Highest Spice" value={stats.highestSpice} />
@@ -50,26 +58,24 @@ export default function TrophyRoom({ vfTag, userXP, rankIntel, activeTheme, setT
           <StatBlock label="Field Heists" value={stats.deployments} />
         </div>
 
-        {/* 3. FRYD BOARD */}
         <div className="mt-4 border-t-4 border-black pt-6">
-          <h3 className="text-xl font-black uppercase tracking-widest mb-4">Fryd Board</h3>
+          <h3 className="text-xl font-black uppercase tracking-widest mb-4">Fryd Board Global</h3>
           <div className="flex flex-col gap-3">
-             <div className="border-2 border-black bg-white p-3 flex justify-between items-center shadow-[2px_2px_0px_0px_rgba(0,0,0,1)]">
-                <span className="font-black text-gray-400 uppercase tracking-widest">1. COMMANDER_V</span>
-                <span className="font-black text-red-600">12,500 XP</span>
-             </div>
-             <div className="border-2 border-black bg-white p-3 flex justify-between items-center shadow-[2px_2px_0px_0px_rgba(0,0,0,1)]">
-                <span className="font-black text-gray-400 uppercase tracking-widest">2. SOUS_GHOST</span>
-                <span className="font-black text-orange-500">8,200 XP</span>
-             </div>
-             <div className="border-2 border-black bg-white p-3 flex justify-between items-center shadow-[2px_2px_0px_0px_rgba(220,38,38,1)] border-red-600 ring-2 ring-red-50">
-                <span className="font-black text-black uppercase tracking-widest">3. {vfTag || 'YOU'}</span>
-                <span className="font-black text-black">{userXP || 0} XP</span>
-             </div>
+             {leaderboard.length > 0 ? leaderboard.map((user, idx) => {
+                const isMe = user.vf_tag === vfTag;
+                const colors = ['text-red-600', 'text-orange-500', 'text-black'];
+                return (
+                  <div key={idx} className={`border-2 border-black bg-white p-3 flex justify-between items-center shadow-[2px_2px_0px_0px_rgba(0,0,0,1)] ${isMe ? 'border-red-600 ring-2 ring-red-50' : ''}`}>
+                    <span className={`font-black uppercase tracking-widest ${isMe ? 'text-black' : 'text-gray-400'}`}>{idx + 1}. {user.vf_tag}</span>
+                    <span className={`font-black ${colors[idx] || 'text-black'}`}>{user.total_xp} XP</span>
+                  </div>
+                );
+             }) : (
+                <div className="text-center font-black text-gray-400 text-xs py-4">SYNCING NETWORK...</div>
+             )}
           </div>
         </div>
 
-        {/* 4. CANVAS OVERRIDE */}
         <div className="mt-4 border-t-4 border-black pt-6">
           <h3 className="text-xl font-black uppercase tracking-widest mb-4">Canvas Override</h3>
           <div className="grid grid-cols-3 md:grid-cols-6 gap-3">
@@ -77,12 +83,7 @@ export default function TrophyRoom({ vfTag, userXP, rankIntel, activeTheme, setT
                const isUnlocked = userXP >= t.reqXP;
                const isActive = activeTheme === t.id;
                return (
-                 <button
-                   key={t.id}
-                   disabled={!isUnlocked}
-                   onClick={() => setTheme(t.id)}
-                   className={`p-3 border-2 transition-all flex flex-col items-center justify-between gap-3 ${isActive ? 'border-red-600 bg-red-50' : 'border-black bg-white'} ${!isUnlocked ? 'opacity-50 grayscale' : 'hover:-translate-y-1 hover:shadow-[4px_4px_0px_0px_rgba(0,0,0,1)]'}`}
-                 >
+                 <button key={t.id} disabled={!isUnlocked} onClick={() => setTheme(t.id)} className={`p-3 border-2 transition-all flex flex-col items-center justify-between gap-3 ${isActive ? 'border-red-600 bg-red-50' : 'border-black bg-white'} ${!isUnlocked ? 'opacity-50 grayscale' : 'hover:-translate-y-1 hover:shadow-[4px_4px_0px_0px_rgba(0,0,0,1)]'}`}>
                     <div className={`w-full h-8 ${t.bg} border border-black`}></div>
                     <span className="text-[9px] font-black uppercase tracking-widest text-center leading-tight">{t.name}</span>
                  </button>
@@ -91,8 +92,7 @@ export default function TrophyRoom({ vfTag, userXP, rankIntel, activeTheme, setT
           </div>
         </div>
 
-        {/* 5. SETTINGS */}
-        <div className="mt-6 border-t-4 border-black pt-6 flex flex-col gap-4">
+        <div className="mt-6 border-t-4 border-black pt-6 flex flex-col gap-4 pb-12">
           <h3 className="text-xl font-black uppercase tracking-widest">Settings & Comms</h3>
           <button className="w-full text-left p-4 border-2 border-black bg-white hover:bg-gray-100 font-bold uppercase tracking-widest flex justify-between items-center transition-colors">
             <span>Manage Foody Subscription (₹30/mo)</span>

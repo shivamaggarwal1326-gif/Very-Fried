@@ -9,10 +9,20 @@ export default function Admin() {
   const [rawText, setRawText] = useState('');
   const [statusLogs, setStatusLogs] = useState(['> GLOBAL RECIPE NETWORK ONLINE.']);
   const [isProcessing, setIsProcessing] = useState(false);
+  const [confirmDeleteId, setConfirmDeleteId] = useState(null); 
   const logScrollRef = useRef(null);
 
   useEffect(() => {
-    fetchRecipes();
+    const secureBoot = async () => {
+      const { data } = await supabase.rpc('is_veryfryd_admin');
+      if (data === true) {
+        fetchRecipes();
+      } else {
+        logStatus('CRITICAL: UNAUTHORIZED ACCESS ATTEMPT. DATABASE LOCKED.');
+        setRecipes([]);
+      }
+    };
+    secureBoot();
   }, []);
 
   useEffect(() => {
@@ -34,7 +44,6 @@ export default function Admin() {
     setStatusLogs(prev => [...prev, `> ${msg}`]);
   };
 
-  // --- 1. CREATE: The Claude AI Parser ---
   const processAndDeployNew = async () => {
     if (!rawText.trim()) { logStatus('ERROR: NO INTEL DETECTED.'); return; }
     setIsProcessing(true);
@@ -68,7 +77,6 @@ export default function Admin() {
       }
       ESTIMATE NUTRIENTS AND PRICES IF MISSING. DO NOT use Markdown formatting (\`\`\`json). Output RAW JSON ONLY.`;
 
-      // STRICTLY USING CLAUDE
       const response = await fetch('/api/analyst', {
         method: 'POST', 
         headers: { 'Content-Type': 'application/json' }, 
@@ -79,19 +87,28 @@ export default function Admin() {
       });
 
       const data = await response.json();
-      if (!response.ok) throw new Error(data.error?.message || "Secure routing failed.");
+      if (!response.ok) throw new Error(data.error?.message || data.error || "Secure routing failed.");
 
-      logStatus('CLAUDE SUCCESS: JSON BLOCKS GENERATED.');
+      logStatus('CLAUDE SUCCESS: DECODING AI PAYLOAD...');
       
-      let outputText = data.text.trim();
-      if (outputText.startsWith('```json')) outputText = outputText.replace(/^```json/, '').replace(/```$/, '').trim();
-      else if (outputText.startsWith('```')) outputText = outputText.replace(/^```/, '').replace(/```$/, '').trim();
+      // --- THE FIX: Robust JSON Extraction ---
+      // This regex forces the parser to ignore Claude's conversational text 
+      // and strictly extract the JSON block, even if it has markdown backticks.
+      const jsonMatch = data.text.match(/\{[\s\S]*\}/);
+      if (!jsonMatch) throw new Error("AI failed to generate valid JSON structure.");
 
       let recipeJSON;
-      try { recipeJSON = JSON.parse(outputText); } catch (err) { throw new Error("AI returned malformed JSON."); }
+      try { 
+        recipeJSON = JSON.parse(jsonMatch[0]); 
+      } catch (err) { 
+        throw new Error("AI returned malformed JSON."); 
+      }
 
       logStatus('INITIATING CLOUD DEPLOYMENT TO SUPABASE...');
-      const { error: dbError } = await supabase.from('recipes').insert([{ id: recipeJSON.id, data: recipeJSON }]);
+      
+      // --- THE FIX: UPSERT ---
+      // Swapped .insert() to .upsert() so duplicate IDs safely overwrite instead of crashing the database.
+      const { error: dbError } = await supabase.from('recipes').upsert([{ id: recipeJSON.id, data: recipeJSON }]);
       if (dbError) throw dbError;
 
       logStatus(`SUCCESS! [${recipeJSON.title}] IS LIVE ON THE NETWORK.`);
@@ -104,7 +121,6 @@ export default function Admin() {
     } finally { setIsProcessing(false); }
   };
 
-  // --- 2. UPDATE: Direct JSON Override ---
   const handleUpdate = async () => {
     setIsProcessing(true);
     logStatus('VALIDATING JSON STRUCTURE...');
@@ -124,11 +140,9 @@ export default function Admin() {
     } finally { setIsProcessing(false); }
   };
 
-  // --- 3. DELETE: Purge from Network ---
   const handleDelete = async (recipeId) => {
-    if(!window.confirm("WARNING: This will instantly wipe this recipe from all consumer and merchant terminals globally. Proceed?")) return;
-    
     setIsProcessing(true);
+    setConfirmDeleteId(null); 
     logStatus(`INITIATING PURGE PROTOCOL FOR [${recipeId}]...`);
     
     const { error } = await supabase.from('recipes').delete().eq('id', recipeId);
@@ -143,7 +157,6 @@ export default function Admin() {
     setIsProcessing(false);
   };
 
-  // UI Handlers
   const openNewMode = () => { setRawText(''); setViewMode('NEW'); logStatus("AI FORGE OPEN. AWAITING RAW TEXT."); };
   const openEditMode = (recipe) => { 
     setActiveRecipe(recipe); 
@@ -156,10 +169,8 @@ export default function Admin() {
   return (
     <div className="grid grid-cols-1 lg:grid-cols-3 gap-8 flex-1 h-auto min-h-[632px]">
       
-      {/* LEFT COLUMN: THE WORKSPACE */}
       <div className="lg:col-span-2 flex flex-col w-full h-full bg-white/95 backdrop-blur-md border-4 border-black shadow-[6px_6px_0px_0px_rgba(0,0,0,1)] overflow-hidden">
         
-        {/* Workspace Header */}
         <div className="flex justify-between items-center border-b-4 border-black p-4 shrink-0 bg-gray-50">
           <h2 className="text-sm font-black uppercase text-black tracking-widest">
             {viewMode === 'LIST' ? 'Global Recipe Database' : viewMode === 'NEW' ? 'AI Intel Forge' : 'Direct JSON Override'}
@@ -170,28 +181,25 @@ export default function Admin() {
           </div>
         </div>
 
-        {/* WORKSPACE CONTENT ROUTER */}
         <div className="flex-1 overflow-hidden relative">
           
-          {/* MODE 1: LIST */}
           {viewMode === 'LIST' && (
             <div className="absolute inset-0 overflow-y-auto p-4 grid grid-cols-1 sm:grid-cols-2 gap-4 bg-gray-100">
               {recipes.length === 0 ? (
                 <div className="col-span-full flex items-center justify-center h-full text-xs font-black text-gray-400 uppercase italic">No protocols found on network.</div>
               ) : (
                 recipes.map((recipe) => {
-                  // Determine dietary icon colors dynamically
                   const diet = recipe.data?.diet?.toUpperCase() || 'VEG';
-                  let dotColor = "bg-green-600";
-                  let boxColor = "border-green-600";
+                  let dotColor = "bg-green-600"; let boxColor = "border-green-600";
                   if (diet === 'NON-VEG') { dotColor = "bg-red-600"; boxColor = "border-red-600"; }
                   if (diet === 'EGG') { dotColor = "bg-yellow-500"; boxColor = "border-yellow-500"; }
+                  
+                  const isConfirming = confirmDeleteId === recipe.id;
 
                   return (
                     <div key={recipe.id} className="bg-white border-2 border-black p-4 shadow-[3px_3px_0px_0px_rgba(0,0,0,1)] flex flex-col gap-2 relative group">
                       <div className="flex justify-between items-start gap-2">
                         <div className="flex items-start gap-2 overflow-hidden mt-0.5">
-                          {/* Authentic Dietary Icon */}
                           <div className={`w-3.5 h-3.5 border-2 shrink-0 flex items-center justify-center mt-0.5 ${boxColor}`}>
                             <div className={`w-1.5 h-1.5 rounded-full ${dotColor}`}></div>
                           </div>
@@ -201,12 +209,20 @@ export default function Admin() {
                       </div>
                       <p className="text-[10px] text-gray-500 font-bold truncate">{recipe.data?.desc || 'No description available.'}</p>
                       <div className="flex justify-between items-center mt-2 border-t-2 border-gray-100 pt-2">
-                        {/* Swapped Price for Prep Time */}
                         <span className="text-[10px] font-black uppercase text-gray-400">⏱ {recipe.data?.time || 'TIME N/A'}</span>
                         
-                        <div className="flex gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
-                          <button onClick={() => openEditMode(recipe)} className="text-[10px] font-black uppercase bg-black text-white px-2 py-1 hover:bg-gray-800">EDIT</button>
-                          <button onClick={() => handleDelete(recipe.id)} className="text-[10px] font-black uppercase bg-red-100 text-red-600 border border-red-600 px-2 py-1 hover:bg-red-600 hover:text-white transition-colors">PURGE</button>
+                        <div className={`flex gap-2 transition-opacity ${isConfirming ? 'opacity-100' : 'opacity-0 group-hover:opacity-100'}`}>
+                          {!isConfirming ? (
+                            <>
+                              <button onClick={() => openEditMode(recipe)} className="text-[10px] font-black uppercase bg-black text-white px-2 py-1 hover:bg-gray-800">EDIT</button>
+                              <button onClick={() => setConfirmDeleteId(recipe.id)} className="text-[10px] font-black uppercase bg-red-100 text-red-600 border border-red-600 px-2 py-1 hover:bg-red-600 hover:text-white transition-colors">PURGE</button>
+                            </>
+                          ) : (
+                            <div className="flex gap-1">
+                              <button onClick={() => setConfirmDeleteId(null)} className="text-[10px] font-black uppercase bg-gray-200 text-black border border-black px-2 py-1 hover:bg-gray-300">CANCEL</button>
+                              <button onClick={() => handleDelete(recipe.id)} className="text-[10px] font-black uppercase bg-red-600 text-white border border-red-600 px-2 py-1 hover:bg-red-700 animate-pulse">CONFIRM WIPE</button>
+                            </div>
+                          )}
                         </div>
                       </div>
                     </div>
@@ -216,7 +232,6 @@ export default function Admin() {
             </div>
           )}
 
-          {/* MODE 2: NEW (AI FORGE) */}
           {viewMode === 'NEW' && (
             <div className="absolute inset-0 bg-[#0a0a0a] flex flex-col">
               <div className="absolute inset-0 z-0 opacity-10 pointer-events-none" style={{ backgroundImage: 'linear-gradient(#333 1px, transparent 1px), linear-gradient(90deg, #333 1px, transparent 1px)', backgroundSize: '20px 20px' }}></div>
@@ -231,7 +246,6 @@ export default function Admin() {
             </div>
           )}
 
-          {/* MODE 3: EDIT (JSON OVERRIDE) */}
           {viewMode === 'EDIT' && (
             <div className="absolute inset-0 bg-[#0a0a0a] flex flex-col">
               <div className="absolute inset-0 z-0 opacity-10 pointer-events-none" style={{ backgroundImage: 'linear-gradient(#333 1px, transparent 1px), linear-gradient(90deg, #333 1px, transparent 1px)', backgroundSize: '20px 20px' }}></div>
@@ -250,19 +264,16 @@ export default function Admin() {
         </div>
       </div>
 
-      {/* RIGHT COLUMN: STATUS TERMINAL */}
       <div className="flex flex-col h-full bg-black/90 backdrop-blur-md border-4 border-black shadow-[8px_8px_0px_0px_rgba(0,0,0,1)] lg:col-span-1">
         
-        {/* Terminal Header */}
         <div className="bg-red-600 p-3 border-b-4 border-black flex justify-between items-center shrink-0">
           <span className="text-white font-black uppercase text-xs tracking-widest">Status Terminal</span>
           <div className={`w-2 h-2 rounded-full bg-white ${isProcessing ? 'animate-pulse' : ''}`}></div>
         </div>
 
-        {/* Logs Output */}
         <div className="flex-1 overflow-y-auto p-4 space-y-3 bg-transparent scrollbar-hide min-h-[300px]">
           {statusLogs.map((log, i) => (
-            <div key={i} className={`font-mono text-[10px] uppercase break-words leading-relaxed ${log.includes('FAILURE') || log.includes('ERROR') || log.includes('PURGE FAILED') ? 'text-red-500 font-bold' : log.includes('SUCCESS') ? 'text-green-400' : log.includes('WARNING') ? 'text-yellow-400' : 'text-gray-400'}`}>
+            <div key={i} className={`font-mono text-[10px] uppercase break-words leading-relaxed ${log.includes('FAILURE') || log.includes('ERROR') || log.includes('PURGE FAILED') || log.includes('CRITICAL') ? 'text-red-500 font-bold' : log.includes('SUCCESS') ? 'text-green-400' : log.includes('WARNING') ? 'text-yellow-400' : 'text-gray-400'}`}>
               {log}
             </div>
           ))}
@@ -270,7 +281,6 @@ export default function Admin() {
           <div ref={logScrollRef} />
         </div>
 
-        {/* Dynamic Action Button */}
         <div className="p-4 bg-gray-900 border-t-4 border-black shrink-0">
           {viewMode === 'LIST' ? (
              <button disabled className="w-full py-4 font-black uppercase tracking-widest text-xs border-4 border-black bg-gray-800 text-gray-500 cursor-not-allowed">

@@ -7,6 +7,7 @@ import LiveFloor from './LiveFloor.jsx';
 import InventoryMatrix from './InventoryMatrix.jsx';
 import IntelligenceDash from './IntelligenceDash.jsx';
 import OnboardingInterview from './OnboardingInterview.jsx';
+import MenuMatrix from './MenuMatrix.jsx'; // --- PATCH 4: Import MenuMatrix
 
 const INITIAL_TABLES = [
   ...Array.from({ length: 6 }, (_, i) => ({ 
@@ -71,17 +72,14 @@ export default function MerchantCRM({ onExit }) {
     checkSession();
   }, []);
 
-  // --- UPGRADED: Coordinates String Parser ---
   const fetchTargetedWeather = async (locationData) => {
     try {
       let url = `/api/weather?t=${Date.now()}`; 
       
-      // If the new 'coordinates' string exists, split it!
       if (locationData?.coordinates) {
         const [lat, lon] = locationData.coordinates.split(',').map(c => c.trim());
         if (lat && lon) url += `&lat=${lat}&lon=${lon}`;
       } 
-      // Fallback for older test accounts that still have separate lat/lng
       else if (locationData?.lat && locationData?.lng) {
         url += `&lat=${locationData.lat}&lon=${locationData.lng}`;
       } 
@@ -132,11 +130,15 @@ export default function MerchantCRM({ onExit }) {
            
            setTables(prev => prev.map(t => {
              if (t.id === incomingTableId) {
-               if (t.status === 'OCCUPIED' && t.activeToken && t.activeToken !== incomingToken) return t; 
+               // MULTIPLAYER FIX: Removed the token-lock check so multiple phones can order to the same table.
                const existing = t.items.find(i => i.name === matchedItem.name);
                let newItems = existing ? t.items.map(i => i.name === matchedItem.name ? { ...i, qty: i.qty + 1 } : i) : [...t.items, { ...matchedItem, qty: 1 }];
                const sessionStart = t.session_start || Date.now();
-               return { ...t, items: newItems, status: 'OCCUPIED', activeToken: incomingToken, session_start: sessionStart };
+               
+               // We still log the activeToken of the FIRST person to start the tab for XP tracking
+               const assignedToken = t.activeToken || incomingToken;
+               
+               return { ...t, items: newItems, status: 'OCCUPIED', activeToken: assignedToken, session_start: sessionStart };
              }
              return t;
            }));
@@ -493,7 +495,6 @@ export default function MerchantCRM({ onExit }) {
       <OnboardingInterview 
         merchantData={merchantData} 
         onComplete={async (newPriors) => {
-          // --- UPGRADED: Force database save immediately to break the loop ---
           const { error } = await supabase.from('merchants').update({ merchant_priors: newPriors }).eq('id', merchantData.id);
           if (error) console.error("Database Save Error:", error.message);
           
@@ -519,6 +520,7 @@ export default function MerchantCRM({ onExit }) {
             <div className="flex flex-wrap gap-3 mt-4">
               <NavTab label="Live Floor" subLabel="POS" onClick={() => setActiveView('TABLES')} isActive={activeView === 'TABLES'} accentColor="bg-black" />
               <NavTab label="Intelligence" subLabel="Foody AI" onClick={() => setActiveView('DASHBOARD')} isActive={activeView === 'DASHBOARD'} accentColor={themeHexClass} />
+              <NavTab label="Menu" subLabel="Matrix" onClick={() => setActiveView('MENU_MATRIX')} isActive={activeView === 'MENU_MATRIX'} accentColor="bg-black" /> {/* --- PATCH 5: Menu Tab --- */}
               <NavTab label="Inventory" subLabel="Matrix" onClick={() => setActiveView('INVENTORY')} isActive={activeView === 'INVENTORY'} accentColor="bg-black" />
             </div>
           </div>
@@ -531,6 +533,14 @@ export default function MerchantCRM({ onExit }) {
         )}
         {activeView === 'TABLES' && (
           <LiveFloor tables={tables} setTables={setTables} liveMenu={liveMenu} merchantData={merchantData} hasXP={hasXP} onRefreshDashboard={fetchLiveDashboardData} />
+        )}
+        {/* --- PATCH 6: Menu Matrix Render View --- */}
+        {activeView === 'MENU_MATRIX' && (
+          <MenuMatrix 
+            merchantData={merchantData} 
+            inventoryStock={inventoryStock} 
+            onMenuUpdate={() => fetchRealMenu(merchantData.id)} 
+          />
         )}
         {activeView === 'INVENTORY' && (
           <InventoryMatrix inventoryStock={inventoryStock} setInventoryStock={setInventoryStock} merchantData={merchantData} />

@@ -86,7 +86,7 @@ export default function PrepChecklist({ recipeData, onStartCooking, onBackToDash
               onClick={onBackToDashboard}
               className="text-black text-[10px] md:text-xs font-black uppercase tracking-widest hover:text-red-600 transition-colors text-left self-start"
             >
-              ← MAKE YOUR MOOD
+              ← COOK YOUR MOOD
             </button>
             <div>
               <h1 className="text-3xl md:text-5xl font-black uppercase tracking-tighter leading-none">Mise en Place</h1>

@@ -2,7 +2,7 @@
 import React, { useState, useEffect } from 'react';
 import { motion, AnimatePresence } from 'framer-motion'; 
 import { supabase } from './lib/supabaseClient.js'; 
-import { useStore } from './lib/store.js'; // --- ZUSTAND VAULT IMPORT ---
+import { useStore } from './lib/store.js'; 
 
 import BottomNav from "./ui/layout/BottomNav.jsx";
 import MerchantCRM from './ui/layout/MerchantCRM.jsx';
@@ -22,6 +22,7 @@ import SpiceSelector from './ui/layout/SpiceSelector.jsx';
 import VerificationProtocol from './ui/layout/VerificationProtocol.jsx'; 
 import Auth from './ui/layout/Auth.jsx'; 
 import LevelUpLab from './ui/layout/LevelUpLab.jsx'; 
+import PublicMenu from './ui/layout/PublicMenu.jsx'; 
 
 const generateVFTag = () => {
   const chars = '0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ';
@@ -84,6 +85,8 @@ function ConsumerApp({ onNavigate }) {
   const [dynamicDishes, setDynamicDishes] = useState([]);
   const [isLoadingCloud, setIsLoadingCloud] = useState(true);
 
+  const [systemError, setSystemError] = useState(null);
+
   const rankIntel = getRankIntel(userXP);
 
   const handleThemeChange = (newTheme) => {
@@ -91,31 +94,103 @@ function ConsumerApp({ onNavigate }) {
     localStorage.setItem('veryfryd_theme', newTheme);
   };
 
+  // =========================================================================
+  // SURGICAL PATCH: PERFECTED NFC ROUTING
+  // =========================================================================
   useEffect(() => {
-    if (typeof window !== 'undefined') {
-      const params = new URLSearchParams(window.location.search);
-      const t = params.get('t');
-      const m = params.get('m'); 
-      
-      if (t && m) {
-        const newToken = generateSessionToken();
-        setTableSession(t, newToken, m); 
+    const initNFC = async () => {
+      if (typeof window !== 'undefined') {
+        const params = new URLSearchParams(window.location.search);
+        const t = params.get('t');
+        const m = params.get('m'); 
         
-        localStorage.setItem('vf_active_table', t);
-        localStorage.setItem('vf_active_merchant', m); 
-        localStorage.setItem('vf_session_token', newToken);
-        
-        window.history.replaceState({}, '', window.location.pathname);
-      } else {
-        const savedTable = localStorage.getItem('vf_active_table');
-        const savedToken = localStorage.getItem('vf_session_token');
-        const savedMerchant = localStorage.getItem('vf_active_merchant');
-        if (savedTable && savedToken) {
-          setTableSession(savedTable, savedToken, savedMerchant); 
+        if (t && m) {
+          const newToken = generateSessionToken();
+          setTableSession(t, newToken, m); 
+          
+          localStorage.setItem('vf_active_table', t);
+          localStorage.setItem('vf_active_merchant', m); 
+          localStorage.setItem('vf_session_token', newToken);
+          
+          window.history.replaceState({}, '', window.location.pathname);
+
+          // Check merchant tier before routing
+          const { data: merchantRow } = await supabase
+            .from('merchants')
+            .select('partnership_tier')
+            .eq('id', m)
+            .single();
+
+          const tier = merchantRow?.partnership_tier;
+
+          if (tier === 'STEALTH_ELITE') {
+            // Stealth Elite: bypass all auth, drop straight into clean menu
+            setCurrentView('stealth_menu');
+          } else {
+            // Elite Partner: Silent Ghost Login
+            const { data: { session: currentSession } } = await supabase.auth.getSession();
+            if (!currentSession) {
+              const { data: ghostData, error } = await supabase.auth.signInAnonymously();
+              if (!error && ghostData?.user) {
+                const newTag = generateVFTag();
+                await supabase.from('profiles').upsert([{ id: ghostData.user.id, vf_tag: newTag, total_xp: 0, rank_name: 'Commis Chef' }], { onConflict: 'id' });
+              }
+            }
+            // PHASE 1 LOCKDOWN: Force them to the Kitchen, completely bypassing the Field!
+            setViewingMerchantId(m);
+            setCurrentView('kitchen'); 
+          }
+        } else {
+          const savedTable = localStorage.getItem('vf_active_table');
+          const savedToken = localStorage.getItem('vf_session_token');
+          const savedMerchant = localStorage.getItem('vf_active_merchant');
+          if (savedTable && savedToken) {
+            setTableSession(savedTable, savedToken, savedMerchant); 
+          }
         }
       }
-    }
+    };
+    initNFC();
   }, []);
+  // =========================================================================
+
+  useEffect(() => {
+    const fetchCloudRecipes = async () => {
+      setIsLoadingCloud(true);
+      try {
+        const targetMerchantId = localStorage.getItem('vf_active_merchant');
+        
+        let query = supabase.from('recipes').select('*');
+        if (targetMerchantId) {
+          query = query.eq('merchant_id', targetMerchantId);
+        } else {
+          query = query.is('merchant_id', null); 
+        }
+
+        const { data, error } = await query;
+        if (error) throw error;
+        
+        if (data) {
+          const dict = {};
+          const arr = [];
+          data.forEach(row => {
+            const recipe = row.data;
+            dict[recipe.id] = recipe;
+            arr.push({
+              id: recipe.id, title: recipe.title || 'UNKNOWN PROTOCOL', time: recipe.time || '15 MINS',
+              desc: recipe.desc || 'Loadout details classified.', diet: recipe.diet || 'VEG', category: recipe.category || 'MUNCHIES',
+              price: recipe.price || null
+            });
+          });
+          setRecipeDictionary(dict);
+          setDynamicDishes(arr);
+        }
+      } catch (err) { console.error("Cloud Intel sync failed:", err); } 
+      finally { setIsLoadingCloud(false); }
+    };
+    
+    if (currentView === 'kitchen' || currentView === 'landing') fetchCloudRecipes();
+  }, [currentView, activeTableId]);
 
   const sendBatchToKitchen = async (itemsArray, specificToken, specificTable) => {
     const tableToUse = specificTable || activeTableId;
@@ -137,35 +212,29 @@ function ConsumerApp({ onNavigate }) {
       }]);
       
       if (error) {
-        console.error("SUPABASE BLOCK:", error.message);
-        alert("DATABASE BLOCKED THE ORDER: " + error.message);
+        setSystemError(error.message);
+        setTimeout(() => setSystemError(null), 5000);
       }
     }
   };
 
-  // --- NEW: THE MASTER CLOCK (PHANTOM TIMER FIX) ---
   useEffect(() => {
     const masterClock = setInterval(() => {
-      // Read directly from the Zustand store outside of the React render cycle
       const state = useStore.getState();
-      
       if (state.batchTimer !== null) {
         if (state.batchTimer > 1) {
           state.decrementTimer();
         } else if (state.batchTimer === 1) {
-          // Timer hit zero: Fire the batch to the kitchen!
           state.decrementTimer();
           if (state.pendingBatch.length > 0) {
              sendBatchToKitchen(state.pendingBatch, state.sessionToken, state.activeTableId);
           }
           state.markBatchSent(); 
-          console.log("VeryFryd OS: Batch auto-fired to kitchen.");
         }
       }
     }, 1000);
-
     return () => clearInterval(masterClock);
-  }, []); // Runs once and loops globally
+  }, []);
 
   const handleFieldCheckout = (loadoutItems) => {
     if (!activeTableId) return false; 
@@ -200,32 +269,6 @@ function ConsumerApp({ onNavigate }) {
   };
 
   useEffect(() => {
-    const fetchCloudRecipes = async () => {
-      setIsLoadingCloud(true);
-      try {
-        const { data, error } = await supabase.from('recipes').select('*').is('merchant_id', null);
-        if (error) throw error;
-        if (data) {
-          const dict = {};
-          const arr = [];
-          data.forEach(row => {
-            const recipe = row.data;
-            dict[recipe.id] = recipe;
-            arr.push({
-              id: recipe.id, title: recipe.title || 'UNKNOWN PROTOCOL', time: recipe.time || '15 MINS',
-              desc: recipe.desc || 'Loadout details classified.', diet: recipe.diet || 'VEG', category: recipe.category || 'MUNCHIES'
-            });
-          });
-          setRecipeDictionary(dict);
-          setDynamicDishes(arr);
-        }
-      } catch (err) { console.error("Cloud Intel sync failed:", err); } 
-      finally { setIsLoadingCloud(false); }
-    };
-    if (currentView === 'kitchen' || currentView === 'landing') fetchCloudRecipes();
-  }, [currentView]);
-
-  useEffect(() => {
     const initializeAuth = async () => {
       const { data: { session: currentSession } } = await supabase.auth.getSession();
       if (currentSession?.user) {
@@ -234,6 +277,7 @@ function ConsumerApp({ onNavigate }) {
       } 
     };
     initializeAuth();
+    
     const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
       setSession(session);
       if (session) {
@@ -376,6 +420,20 @@ function ConsumerApp({ onNavigate }) {
   return (
     <CommsShield>
       <KitchenCanvas activeTheme={activeTheme}>
+        
+        <AnimatePresence>
+          {systemError && (
+            <motion.div 
+              initial={{ opacity: 0, y: -20 }} 
+              animate={{ opacity: 1, y: 0 }} 
+              exit={{ opacity: 0, y: -20 }} 
+              className="fixed top-4 left-1/2 transform -translate-x-1/2 z-[9999] bg-red-600 text-white font-black uppercase text-[10px] md:text-xs tracking-widest px-6 py-3 border-4 border-black shadow-[4px_4px_0px_0px_rgba(0,0,0,1)] text-center w-[90%] max-w-md pointer-events-auto"
+            >
+              🔥 SYSTEM FAILURE: {systemError}
+            </motion.div>
+          )}
+        </AnimatePresence>
+
         <AnimatePresence>
           {showLevelUp && <div className="fixed inset-0 z-[1000]"><LevelUpLab rankTitle={justUnlockedRank} onClose={(shouldEquip) => { if (shouldEquip) handleThemeChange(justUnlockedTheme); setShowLevelUp(false); }} /></div>}
         </AnimatePresence>
@@ -395,7 +453,7 @@ function ConsumerApp({ onNavigate }) {
                 <div className="mb-3 bg-yellow-100 border-2 border-black p-2">
                   <div className="flex justify-between items-center mb-1">
                     <span className="text-[9px] font-black uppercase text-yellow-800">Pending Batch</span>
-                    <span className="text-[10px] font-black text-red-600 animate-pulse">{batchTimer}s</span>
+                    <span className="text-[10px] font-black text-red-600 animate-pulse">{useStore.getState().batchTimer}s</span>
                   </div>
                   {pendingBatch.map((item, idx) => (
                     <div key={idx} className="text-[10px] font-bold text-black border-t border-yellow-300 pt-1 mt-1 truncate">
@@ -426,11 +484,11 @@ function ConsumerApp({ onNavigate }) {
 
         {showVerification && <VerificationProtocol onSkip={() => { setShowVerification(false); if (pendingXP > 0) applyRewards(pendingXP, 0); }} onLoginRedirect={() => { setShowVerification(false); if (pendingXP > 0) applyRewards(pendingXP, 0); setCurrentView('auth'); }} rememberedTag={vfTag} />}
 
-        {session && !session.user.is_anonymous && currentView !== 'auth' && currentView !== 'lab' && (
+        {session && !session.user.is_anonymous && currentView !== 'auth' && currentView !== 'lab' && currentView !== 'stealth_menu' && (
           <button onClick={handleSignOut} className="fixed bottom-6 left-6 z-[100] bg-black text-white px-3 py-1.5 text-[9px] md:text-[10px] font-black uppercase tracking-widest border border-red-600 hover:bg-red-600 transition-colors shadow-[4px_4px_0px_0px_rgba(220,38,38,1)]">Disconnect</button>
         )}
 
-        {currentView !== 'landing' && currentView !== 'auth' && currentView !== 'lab' && (
+        {currentView !== 'landing' && currentView !== 'auth' && currentView !== 'lab' && currentView !== 'stealth_menu' && (
           <Foody isOpen={isFoodyOpen} onToggle={() => setIsFoodyOpen(!isFoodyOpen)} activeRecipeData={currentView === 'stages' || currentView === 'prep' ? activeRecipeData : null} currentStageIndex={currentView === 'stages' ? currentStageIndex : 0} recipeDictionary={recipeDictionary} tutorialMessage={tutorialMessage} onClearTutorial={() => setTutorialMessage(null)} />
         )}
 
@@ -449,18 +507,36 @@ function ConsumerApp({ onNavigate }) {
           </ErrorBoundary>
         )}
 
-        {currentView !== 'lab' && <BottomNav currentView={currentView} setCurrentView={setCurrentView} onOpenDossier={() => setShowTrophyRoom(true)} />}
+        {currentView !== 'lab' && currentView !== 'stealth_menu' && (
+          <BottomNav 
+            currentView={currentView} 
+            setCurrentView={setCurrentView} 
+            onOpenDossier={() => setShowTrophyRoom(true)} 
+            isDossierOpen={showTrophyRoom} 
+          />
+        )}
 
         <main className={`p-0 w-full mx-auto flex flex-col relative min-h-screen ${
-          currentView === 'landing' || currentView === 'lab' 
+          currentView === 'landing' || currentView === 'lab' || currentView === 'stealth_menu'
             ? 'max-w-none' 
             : 'max-w-[1440px] pb-24 px-4 md:px-8 lg:px-12'
         }`}>
           {currentView === 'lab' && <LevelUpLab />}
           {currentView === 'landing' && <LandingPage onEnter={handleEnterKitchen} rememberedTag={vfTag} />}
           {currentView === 'auth' && <Auth onBack={() => setCurrentView('landing')} />}
+          
+          {currentView === 'stealth_menu' && (
+            <PublicMenu
+              merchantId={localStorage.getItem('vf_active_merchant')}
+              tableId={localStorage.getItem('vf_active_table')}
+              sessionToken={localStorage.getItem('vf_session_token')}
+            />
+          )}
+
           {currentView === 'kitchen' && <Dashboard availableDishes={dynamicDishes} onSelectRecipe={startRecipe} userXP={userXP} userCoins={userCoins} rankIntel={rankIntel} activeRecipeId={activeRecipeData?.id} isCooking={isCooking} onToggleFoody={() => setIsFoodyOpen(!isFoodyOpen)} />}
           
+          {/* --- PHASE 1 LOCKDOWN: TheField Rendering Removed --- */}
+          {/* 
           {currentView === 'field' && (
              <TheField 
                userXP={userXP} 
@@ -468,7 +544,8 @@ function ConsumerApp({ onNavigate }) {
                onRequireAuth={() => setShowVerification(true)} 
                onFieldCheckout={handleFieldCheckout} 
              />
-          )}
+          )} 
+          */}
 
           {currentView === 'spice-select' && <ErrorBoundary><SpiceSelector recipeData={activeRecipeData} onSelectSpice={handleSpiceSelection} onBack={() => setCurrentView('kitchen')} /></ErrorBoundary>}
           {currentView === 'prep' && <ErrorBoundary><PrepChecklist recipeData={activeRecipeData} isCooking={isCooking} onStartCooking={() => { setIsCooking(true); setCurrentView('stages'); }} onBackToDashboard={() => setCurrentView('kitchen')} /></ErrorBoundary>}
@@ -482,13 +559,8 @@ function ConsumerApp({ onNavigate }) {
   );
 }
 
-// =====================================================================
-// THE CODE SPLIT: Routing traffic based on Hostname AND Path
-// =====================================================================
 export default function App() {
   const [currentPath, setCurrentPath] = useState(window.location.pathname);
-  
-  // Get the hostname (e.g., 'veryfryd.com' or 'merchant.veryfryd.com' or 'localhost')
   const [hostname, setHostname] = useState(window.location.hostname);
 
   useEffect(() => {
@@ -502,8 +574,6 @@ export default function App() {
     setCurrentPath(path);
   };
 
-  // THE SUBDOMAIN LOCK
-  // Checks if the user is on the merchant subdomain OR doing local testing
   const isMerchantPortal = hostname === 'merchant.veryfryd.com' || currentPath === '/merchant';
   const isDirectorPortal = hostname === 'command.veryfryd.com' || currentPath === '/director';
 
@@ -533,6 +603,5 @@ export default function App() {
     );
   }
 
-  // If it's not the merchant subdomain, show the public Consumer App
   return <ConsumerApp onNavigate={navigateTo} />;
 }

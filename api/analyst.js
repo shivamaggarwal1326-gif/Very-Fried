@@ -1,58 +1,73 @@
 // api/analyst.js
 import { generateText } from 'ai';
-import { anthropic } from '@ai-sdk/anthropic';
+import { createAnthropic } from '@ai-sdk/anthropic';
 import { Ratelimit } from '@upstash/ratelimit';
 import { Redis } from '@upstash/redis';
 
-export const config = { maxDuration: 60 };
+export const config = {
+  runtime: 'edge',
+};
 
-// UPSTASH RATE LIMITER: 5 requests per minute per IP
+// UPSTASH RATE LIMITER
 const redis = new Redis({
-  url: process.env.UPSTASH_REDIS_REST_URL,
-  token: process.env.UPSTASH_REDIS_REST_TOKEN,
+  url: process.env.VITE_UPSTASH_REDIS_REST_URL || process.env.UPSTASH_REDIS_REST_URL,
+  token: process.env.VITE_UPSTASH_REDIS_REST_TOKEN || process.env.UPSTASH_REDIS_REST_TOKEN,
 });
+
 const ratelimit = new Ratelimit({
   redis: redis,
   limiter: Ratelimit.slidingWindow(5, "1 m"), 
 });
 
-export default async function handler(req, res) {
-  if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' });
+export default async function handler(req) {
+  if (req.method !== 'POST') {
+    return new Response(JSON.stringify({ error: 'Method not allowed' }), { status: 405 });
+  }
 
   try {
     // 1. RATE LIMITING SHIELD
-    const ip = req.headers['x-forwarded-for'] || '127.0.0.1';
+    const ip = req.headers.get('x-forwarded-for') || '127.0.0.1';
     const { success } = await ratelimit.limit(`analyst_${ip}`);
     if (!success) {
-      return res.status(429).json({ error: "Network busy. Rate limit exceeded. Please wait 60 seconds." });
+      return new Response(JSON.stringify({ error: "Network busy. Rate limit exceeded." }), { status: 429 });
     }
 
     // 2. SECURE KEY CHECK
-    if (!process.env.ANTHROPIC_API_KEY) {
-      return res.status(500).json({ error: "Server Configuration Error: API Key missing." });
+    const apiKey = process.env.VITE_ANTHROPIC_API_KEY || process.env.ANTHROPIC_API_KEY;
+    if (!apiKey) {
+      return new Response(JSON.stringify({ error: "Server Configuration Error: API Key missing." }), { status: 500 });
     }
 
-    const { messages, systemPrompt } = req.body;
-    if (!messages || !systemPrompt) return res.status(400).json({ error: "Malformed payload." });
+    const anthropicClient = createAnthropic({ apiKey });
 
-    const latestMessage = messages[messages.length - 1].content;
-    const requiresDeepThinking = typeof latestMessage === 'string' && (latestMessage.includes('MONTHLY') || latestMessage.includes('PREDICTIVE'));
+    // 3. PARSE BODY FOR EDGE
+    const body = await req.json();
+    const { messages, systemPrompt } = body;
 
-    const selectedModel = requiresDeepThinking 
-      ? 'claude-3-5-sonnet-latest' 
-      : 'claude-3-5-haiku-latest';
+    if (!messages || !systemPrompt) {
+      return new Response(JSON.stringify({ error: "Malformed payload." }), { status: 400 });
+    }
 
+    // --- THE ABSOLUTE FIX: HARD-LOCKED TO SONNET 3.5 ---
+    // All dynamic switching logic is gone. 
+    // This strictly forces the API to use the flagship model every single time.
+    const selectedModel = 'claude-3-5-sonnet-20241022';
+
+    // 4. GENERATE
     const result = await generateText({
-      model: anthropic(selectedModel),
+      model: anthropicClient(selectedModel), 
       system: systemPrompt,
       messages: messages,
-      maxTokens: 500,
+      maxTokens: 1500, 
     });
 
-    return res.status(200).json({ text: result.text });
+    return new Response(JSON.stringify({ text: result.text }), { 
+      status: 200,
+      headers: { 'Content-Type': 'application/json' }
+    });
 
   } catch (error) {
     console.error("ANALYST API ERROR:", error);
-    return res.status(500).json({ error: "AI core failure. Check logs." });
+    return new Response(JSON.stringify({ error: "AI core failure.", details: error.message }), { status: 500 });
   }
 }

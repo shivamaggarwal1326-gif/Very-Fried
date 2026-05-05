@@ -15,7 +15,7 @@ const FloatingSketch = ({ children, startX, delay, duration, rotate, size, sketc
   return (
     <motion.div
       className={`absolute ${size} opacity-[0.15] pointer-events-none z-0`}
-      style={{ left: startX }} /* <--- THE CRITICAL FIX */
+      style={{ left: startX, willChange: 'transform' }} /* <--- GPU ACCELERATION FIX */
       initial={{ y: '120vh', rotate: 0 }}
       animate={{ y: '-20vh', rotate: rotate }}
       transition={{ duration: duration, repeat: Infinity, ease: "linear", delay: delay }}
@@ -41,8 +41,9 @@ export default function KitchenCanvas({ children, activeTheme = 'commis' }) {
   return (
     <div className={`relative min-h-screen w-full ${theme.bg} overflow-hidden transition-colors duration-1000`}>
       
+      {/* GRID OPACITY LOWERED TO MATCH IMAGE 2 */}
       <div 
-        className="absolute inset-0 z-0 opacity-40 transition-opacity duration-1000"
+        className="absolute inset-0 z-0 opacity-[0.06] transition-opacity duration-1000 pointer-events-none"
         style={{ 
           backgroundImage: `linear-gradient(${theme.grid} 1px, transparent 1px), linear-gradient(90deg, ${theme.grid} 1px, transparent 1px)`, 
           backgroundSize: '40px 40px' 
@@ -50,7 +51,6 @@ export default function KitchenCanvas({ children, activeTheme = 'commis' }) {
       ></div>
 
       <div className="absolute inset-0 z-0 overflow-hidden pointer-events-none">
-        
         {/* --- LEFT SIDE --- */}
         <FloatingSketch startX="5%" delay={0} duration={20} rotate={45} size="w-20 md:w-32 lg:w-40" sketchColorClass={theme.sketch}>
           <Provisions.Tomato />
@@ -73,7 +73,7 @@ export default function KitchenCanvas({ children, activeTheme = 'commis' }) {
           <Provisions.Eggshell />
         </FloatingSketch>
 
-        {/* --- DESKTOP ONLY: Extra background depth --- */}
+        {/* --- DESKTOP ONLY --- */}
         {!isMobile && (
           <>
             <FloatingSketch startX="25%" delay={8} duration={22} rotate={15} size="w-20 md:w-28 lg:w-36" sketchColorClass={theme.sketch}>
